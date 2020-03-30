@@ -19,6 +19,8 @@ absl.logging._warn_preinit_stderr = False
 
 from buffalo.misc import aux
 
+EPS = 1e-8
+
 
 class Algo(abc.ABC):
     def __init__(self, *args, **kwargs):
@@ -35,23 +37,33 @@ class Algo(abc.ABC):
         return (aux.Option(opt), opt_path)
 
     def _normalize(self, feat):
-        feat = feat / np.sqrt((feat ** 2).sum(-1) + 1e-8)[..., np.newaxis]
+        feat = feat / np.sqrt((feat ** 2).sum(-1) + EPS)[..., np.newaxis]
         return feat
 
     def initialize(self):
         self.__early_stopping = {'round': 0,
                                  'min_loss': 987654321}
+        if self.opt.random_seed:
+            np.random.seed(self.opt.random_seed)
 
     @abc.abstractmethod
     def normalize(self, group='item'):
-        raise NotImplemented
+        raise NotImplementedError
 
-    def _get_topk_recommendation(self, p, Q, pool, topk, num_workers):
-        # Warning: This should be inherited.
-        if pool is None:
-            topks = self.get_topk(p.dot(Q.T), k=topk, num_threads=num_workers)
-        else:
-            topks = self.get_topk(p.dot(Q[pool].T), k=topk, num_threads=num_workers)
+    def _get_topk_recommendation(self, p, Q, pb, Qb, pool, topk, num_workers):
+        if pool is not None:
+            Q = Q[pool]
+            if Qb is not None:
+                Qb = Qb[pool]
+
+        scores = p.dot(Q.T)
+        if pb is not None:
+            scores += pb
+        if Qb is not None:
+            scores += Qb.T
+
+        topks = self.get_topk(scores, k=topk, num_threads=num_workers)
+        if pool is not None:
             topks = np.array([pool[t] for t in topks])
         return topks
 
@@ -121,10 +133,10 @@ class Algo(abc.ABC):
         else:
             if pool is not None:
                 dot = q.dot(Factor[pool].T)
-                dot = dot / (np.linalg.norm(q) * np.linalg.norm(Factor[pool], axis=1))
+                dot = dot / (np.linalg.norm(q) * np.linalg.norm(Factor[pool], axis=1) + EPS)
             else:
                 dot = q.dot(Factor.T)
-                dot = dot / (np.linalg.norm(q) * np.linalg.norm(Factor, axis=1))
+                dot = dot / (np.linalg.norm(q) * np.linalg.norm(Factor, axis=1) + EPS)
             # topks = np.argsort(dot)[-topk:][::-1]
             topks = self.get_topk(dot, k=topk, num_threads=self.opt.num_workers)
         scores = dot[topks]
@@ -187,7 +199,7 @@ class Algo(abc.ABC):
 
     @abc.abstractmethod
     def _get_feature(self, index, group='item'):
-        raise NotImplemented
+        raise NotImplementedError
 
     def get_weighted_feature(self, weights, group='item', min_length=1):
         if isinstance(weights, dict):
@@ -198,7 +210,7 @@ class Algo(abc.ABC):
         if len(feat) < min_length:
             return None
         feat = np.array(feat, dtype=np.float64).mean(axis=0)
-        return (feat / np.linalg.norm(feat)).astype(np.float32)
+        return (feat / np.linalg.norm(feat) + EPS).astype(np.float32)
 
     def periodical(self, period, current):
         if not period or (current + 1) % period == 0:
@@ -207,7 +219,7 @@ class Algo(abc.ABC):
 
     def save_best_only(self, loss, best_loss, i):
         if self.opt.save_best and best_loss > loss and self.periodical(self.opt.save_period, i):
-            self.save(self.model_path)
+            self.save(self.opt.model_path)
             return loss
         return best_loss
 
@@ -322,7 +334,7 @@ class Serializable(abc.ABC):
 class TensorboardExtention(object):
     @abc.abstractmethod
     def get_evaluation_metrics(self):
-        raise NotImplemented
+        raise NotImplementedError
 
     def _get_initial_tensorboard_data(self):
         tb = aux.Option({'summary_writer': None,

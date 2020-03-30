@@ -134,7 +134,7 @@ void CBPRMF::initialize_model(
         float* P, int32_t P_rows,
         float* Q, int32_t Q_rows,
         float* Qb,
-        int64_t num_total_samples) 
+        int64_t num_total_samples)
 {
     int one = 1;
     int D = opt_["d"].int_value();
@@ -330,6 +330,7 @@ void CBPRMF::worker(int worker_id)
     uniform_int_distribution<int64_t> rng1(0, cum_table_[cum_table_size_ - 1] - 1);
     uniform_int_distribution<int64_t> rng2(0, Q_.rows() - 1);
     double sample_power = opt_["sampling_power"].number_value();
+    bool verify_neg = opt_["verify_neg"].bool_value();
     int uniform_sampling = sample_power == 0.0 ? 1 : 0;
 
     bool per_coordinate_normalize = opt_["per_coordinate_normalize"].bool_value();
@@ -350,21 +351,22 @@ void CBPRMF::worker(int worker_id)
                 for(int i=0; i < num_negative_samples; ++i)
                 {
                     int neg = 0;
-                    if (uniform_sampling) {
-                        neg = rng2(RNG);
-                    }
-                    else {
-                        while (true) {
+                    while(true) {
+                        if(uniform_sampling) {
+                            neg = rng2(RNG);
+                        }
+                        else {
                             int64_t r = rng1(RNG);
                             neg = (int)(lower_bound(cum_table_, cum_table_ + cum_table_size_, r) - cum_table_);
-                            if (seen.find(neg) == seen.end())
-                                break;
                         }
+
+                        if (!verify_neg || (seen.find(neg) == seen.end()))
+                            break;
                     }
 
                     float x_uij = (P_.row(u) * (Q_.row(pos) - Q_.row(neg)).transpose())(0, 0);
                     if (use_bias)
-                        x_uij += (Qb_(pos, 0) - Qb_(neg, 0)); 
+                        x_uij += (Qb_(pos, 0) - Qb_(neg, 0));
 
                     float logit = 0.0;
                     if (MAX_EXP < x_uij) {
@@ -378,10 +380,10 @@ void CBPRMF::worker(int worker_id)
                         logit = exp_table_[(int)((x_uij + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))];
                     }
 
-                    FactorTypeRowMajor item_deriv; 
+                    FactorTypeRowMajor item_deriv;
                     if (update_i or update_j)
                         item_deriv = logit * P_.row(u);
-                    
+
                     // TODO: change to enum class
                     if (optimizer_ == "adam") {
                         if (per_coordinate_normalize)  // critical section
@@ -390,9 +392,9 @@ void CBPRMF::worker(int worker_id)
                             Q_samples_per_coordinates_[neg] += 1;
                         }
                         gradP_.row(u) += logit * (Q_.row(pos) - Q_.row(neg));
-                        
+
                         if (update_i) {
-                            gradQ_.row(pos) += item_deriv; 
+                            gradQ_.row(pos) += item_deriv;
                             if (use_bias)
                                 gradQb_(pos, 0) += logit;
                         }
@@ -407,13 +409,13 @@ void CBPRMF::worker(int worker_id)
                         if (update_i) {
                             Q_.row(pos) += alpha * (item_deriv - reg_i * Q_.row(pos));
                             if (use_bias)
-                                Qb_(pos, 0) += (logit - reg_b * Qb_(pos, 0));
+                                Qb_(pos, 0) += alpha * (logit - reg_b * Qb_(pos, 0));
                         }
 
                         if (update_j) {
-                            Q_.row(neg) -= alpha * (item_deriv - reg_j * Q_.row(neg));
+                            Q_.row(neg) += alpha * (-item_deriv - reg_j * Q_.row(neg));
                             if (use_bias)
-                                Qb_(pos, 0) -= (logit - reg_b * Qb_(neg, 0));
+                                Qb_(neg, 0) += alpha * (-logit - reg_b * Qb_(neg, 0));
                         }
 
                         P_.row(u) += alpha * g;
@@ -461,8 +463,7 @@ double CBPRMF::compute_loss(int32_t num_loss_samples,
         loss[omp_get_thread_num()] += log(1.0 + exp(-x_uij));
     }
     double l = accumulate(loss.begin(), loss.end(), 0.0);
-    l /= (double)loss.size();
-    return l;
+    return l / (double) num_loss_samples;
 }
 
 void CBPRMF::update_adam(

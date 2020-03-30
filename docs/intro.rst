@@ -28,6 +28,7 @@ Requirements
   - numpy
   - cython
   - n2
+  - cmake
 
 
 From source code
@@ -48,7 +49,14 @@ We highly recommend starting with the unit-test codes. Checkout ./tests director
 
 .. code-block:: bash
 
-    $ tests> nosetests ./tests/algo/test_algo.py -v
+    $ buffalo.git/tests> nosetests ./algo/test_als.py -v
+
+
+or 
+
+.. code-block:: bash
+
+    $ buffalo.git/tests> pytest ./algo/test_als.py -v
 
 
 Database
@@ -60,7 +68,7 @@ The Stream data format consists of two files:
   - main 
 
     - Assumed that the data is reading history of users from some blog service, then each line is a reading history corresponding to each row of UID files. (i.e. users lists)
-    - The reading history is sererated by spaces, and the past is the left and the right is the most recent history.
+    - The reading history is seperated by spaces, and the past is the left and the right is the most recent history.
     - e.g. `A B C D D E` means that a user read the contents in the order A B C D D E.
 
   - uid
@@ -107,7 +115,7 @@ It is recommend to use the log library of buffalo for consistent log format.
 
 .. code-block:: python
 
-    >>> from aurochs.misc import log
+    >>> from buffalo.misc import log
     >>> print(log.NOTSET, log.WARN, log.INFO, log.DEBUG, log.TRACE)
     (0, 1, 2, 3, 4, 5)
     >>> log.set_log_level(log.WARN)  # this set log-level on Python, C++ both sides.
@@ -115,10 +123,8 @@ It is recommend to use the log library of buffalo for consistent log format.
     1
     >>> 
 
-    >>> from aurochs.misc import log, aux
-    >>> logger = aux.get_logger()
+    >>> from buffalo.misc import log
+    >>> logger = log.get_logger()
     >>> with log.pbar(logger.debug, desc='Test', mininterval=1):
         for(i in range(100)):
             time.sleep(0.1)
-
-`log.pbar` is a wrapper class of tqdm(https://tqdm.github.io), except it use Python Logger for logging instead sys.stdout(see first argument).
